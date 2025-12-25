@@ -328,15 +328,12 @@ async function main() {
         },
         preNavigationHooks: [
             async ({ page, request }) => {
-                await page.route('**/*.{png,jpg,jpeg,gif,webp,svg,css,font,woff,woff2}', (route) =>
-                    route.abort(),
-                );
-                await page.setExtraHTTPHeaders({
+                await page.route('**/*.{png,jpg,jpeg,gif,webp,svg,css,font,woff,woff2}', (route) => route.abort());
+                await page.context().setExtraHTTPHeaders({
                     'accept-language': 'en-US,en;q=0.9',
+                    'user-agent':
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
                 });
-                await page.setUserAgent(
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
-                );
                 log.info('Navigating', { url: request.url });
             },
         ],
