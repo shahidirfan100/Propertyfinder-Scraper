@@ -248,6 +248,9 @@ const extractDetailFromHtml = ($, url) => {
 
     const description =
         cleanText(
+            $('article.styles_description__tKGaD').text() ||
+            $('article[class*="styles_description"]').text() ||
+            $('[data-testid="property-description"]').text() ||
             $('[data-testid*="description"], [class*="description"]').text() ||
             $('meta[name="description"]').attr('content'),
         ) || null;
