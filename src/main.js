@@ -133,6 +133,76 @@ const extractListingCards = ($) => {
     return cards;
 };
 
+// Extract listings from embedded JSON when markup is empty (e.g., Next.js __NEXT_DATA__)
+const extractListingsFromEmbeddedJson = (html) => {
+    const results = [];
+    const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
+    let match;
+
+    const candidates = [];
+    while ((match = scriptRegex.exec(html)) !== null) {
+        const content = match[1];
+        if (!content) continue;
+        if (content.includes('__NEXT_DATA__') || content.includes('pageProps') || content.trim().startsWith('{')) {
+            candidates.push(content.trim());
+        }
+    }
+
+    const maybeListingsFromObj = (obj) => {
+        if (!obj || typeof obj !== 'object') return;
+        for (const value of Object.values(obj)) {
+            if (Array.isArray(value)) {
+                if (!value.length || typeof value[0] !== 'object') continue;
+                const first = value[0];
+                const keys = Object.keys(first).map((k) => k.toLowerCase());
+                const hasPrice = keys.some((k) => k.includes('price'));
+                const hasTitle = keys.some((k) => k.includes('title') || k === 'name');
+                const hasUrl = keys.some((k) => k.includes('url') || k === 'slug');
+                if (hasPrice && hasUrl && hasTitle) {
+                    for (const item of value) {
+                        const url =
+                            item.url ||
+                            item.link ||
+                            (item.slug ? `https://www.propertyfinder.ae${item.slug}` : null);
+                        results.push({
+                            title: item.title || item.name || item.description,
+                            price: numberFromText(item.price || item.priceValue || item.amount),
+                            currency: item.currency || 'AED',
+                            location:
+                                item.location?.name ||
+                                item.location ||
+                                item.city ||
+                                item.community ||
+                                null,
+                            bedrooms: item.bedrooms || item.beds || item.rooms,
+                            bathrooms: item.bathrooms || item.baths,
+                            area: item.area || item.builtupArea || item.size,
+                            areaUnit: item.areaUnit || item.area_unit || null,
+                            agentName: item.contactName || item.agent?.name || null,
+                            url: toAbsoluteUrl(url),
+                        });
+                    }
+                }
+            } else if (typeof value === 'object') {
+                maybeListingsFromObj(value);
+            }
+        }
+    };
+
+    for (const content of candidates) {
+        try {
+            const cleaned = content.replace(/^window\.__NEXT_DATA__\s*=\s*/, '').trim().replace(/;$/, '');
+            const parsed = JSON.parse(cleaned);
+            maybeListingsFromObj(parsed);
+            if (results.length) break;
+        } catch {
+            continue;
+        }
+    }
+
+    return results;
+};
+
 const extractJsonLd = ($) => {
     try {
         const scripts = $('script[type="application/ld+json"]').toArray().slice(0, 5);
@@ -344,7 +414,18 @@ async function main() {
 
             const html = await page.content();
             const $ = load(html);
-            const cards = extractListingCards($);
+            let cards = extractListingCards($);
+
+            if (!cards.length) {
+                const embeddedListings = extractListingsFromEmbeddedJson(html);
+                if (embeddedListings.length) {
+                    cards = embeddedListings;
+                    log.info('Extracted listings from embedded JSON', {
+                        count: embeddedListings.length,
+                        pageNo,
+                    });
+                }
+            }
 
             if (!cards.length) {
                 log.warning('No cards found even with JS', { url: request.url, pageNo });
