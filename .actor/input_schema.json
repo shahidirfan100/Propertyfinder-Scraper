@@ -9,15 +9,37 @@
       "type": "string",
       "description": "Start scraping from a specific PropertyFinder.ae search URL. If provided, this overrides other search parameters.",
       "editor": "textfield",
-      "example": "https://www.propertyfinder.ae/en/search?page=1&c=1&fu=0&ob=mr"
+      "example": "https://www.propertyfinder.ae/en/buy/dubai/apartments-for-sale.html"
     },
     "propertyType": {
       "title": "Property Type",
       "type": "string",
       "description": "Type of property to search for",
       "editor": "select",
-      "enum": ["apartment", "villa", "townhouse", "penthouse", "land", "warehouse", "office", "shop", "duplex", "compound"],
-      "enumTitles": ["Apartment", "Villa", "Townhouse", "Penthouse", "Land", "Warehouse", "Office", "Shop", "Duplex", "Compound"],
+      "enum": [
+        "apartment",
+        "villa",
+        "townhouse",
+        "penthouse",
+        "land",
+        "warehouse",
+        "office",
+        "shop",
+        "duplex",
+        "compound"
+      ],
+      "enumTitles": [
+        "Apartment",
+        "Villa",
+        "Townhouse",
+        "Penthouse",
+        "Land",
+        "Warehouse",
+        "Office",
+        "Shop",
+        "Duplex",
+        "Compound"
+      ],
       "default": "apartment",
       "prefill": "apartment"
     },
@@ -84,7 +106,9 @@
       "editor": "proxy",
       "default": {
         "useApifyProxy": true,
-        "apifyProxyGroups": ["RESIDENTIAL"]
+        "apifyProxyGroups": [
+          "RESIDENTIAL"
+        ]
       }
     }
   },

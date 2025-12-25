@@ -1,9 +1,7 @@
-// PropertyFinder.ae scraper - Playwright for listings, HTTP+Cheerio for detail pages
+// PropertyFinder.ae scraper - Fast HTTP + JSON extraction with Cheerio fallback
 import { Actor, log } from 'apify';
-import { PlaywrightCrawler } from 'crawlee';
-import { chromium } from 'playwright';
+import { CheerioCrawler } from 'crawlee';
 import { load } from 'cheerio';
-import { gotScraping } from 'got-scraping';
 
 const cleanText = (text) => {
     if (!text) return null;
@@ -34,6 +32,7 @@ const parsePrice = (text) => {
     return { price, currency };
 };
 
+// NEW: Updated URL builder with correct structure
 const buildSearchUrl = ({ startUrl, location, propertyType, categoryType, page = 1 }) => {
     if (startUrl) {
         const url = new URL(startUrl);
@@ -43,8 +42,9 @@ const buildSearchUrl = ({ startUrl, location, propertyType, categoryType, page =
 
     if (!location) throw new Error('Provide either "startUrl" or "location".');
 
-    const categorySlug = categoryType === 2 ? 'rent' : 'buy';
-    const actionSlug = categorySlug === 'buy' ? 'for-sale' : 'for-rent';
+    const action = categoryType === 2 ? 'rent' : 'sale';
+    const actionPath = categoryType === 2 ? 'rent' : 'buy';
+
     const normalize = (value) =>
         value
             .toLowerCase()
@@ -53,154 +53,114 @@ const buildSearchUrl = ({ startUrl, location, propertyType, categoryType, page =
 
     const locSlug = normalize(location);
     const typeSlug = normalize(propertyType || 'property');
-    const base = `https://www.propertyfinder.ae/en/${categorySlug}/${typeSlug}-${actionSlug}-${locSlug}.html`;
+
+    // New pattern: /en/{buy|rent}/{location}/{type}s-for-{sale|rent}.html
+    const base = `https://www.propertyfinder.ae/en/${actionPath}/${locSlug}/${typeSlug}s-for-${action}.html`;
     const url = new URL(base);
     url.searchParams.set('page', String(page));
     return url.href;
 };
 
+// NEW: Extract __NEXT_DATA__ from script tag (Priority 1)
+const extractNextData = (html) => {
+    try {
+        const match = html.match(/<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
+        if (!match) return null;
+
+        const data = JSON.parse(match[1]);
+        const properties = data?.props?.pageProps?.searchResult?.properties;
+
+        if (!Array.isArray(properties) || !properties.length) return null;
+
+        log.info('Extracted properties from __NEXT_DATA__', { count: properties.length });
+
+        return properties.map(prop => {
+            const priceValue = prop.price || prop.price_value;
+            return {
+                title: prop.name || prop.title,
+                price: typeof priceValue === 'number' ? priceValue : numberFromText(priceValue),
+                currency: prop.currency || 'AED',
+                location: prop.location?.name || prop.location_name || prop.location,
+                bedrooms: prop.bedrooms || prop.bedroom,
+                bathrooms: prop.bathrooms || prop.bathroom,
+                area: prop.area || prop.size,
+                areaUnit: prop.area_unit || 'sqft',
+                agentName: prop.broker?.name || prop.agent?.name || prop.contact_name,
+                url: toAbsoluteUrl(prop.slug || prop.url || prop.property_url),
+                propertyType: prop.category?.name || prop.property_type,
+                verified: prop.verified || false,
+                featured: prop.featured || false,
+            };
+        }).filter(p => p.url); // Only keep properties with valid URLs
+    } catch (err) {
+        log.debug('__NEXT_DATA__ extraction failed', { error: err.message });
+        return null;
+    }
+};
+
+// UPDATED: Improved HTML parsing with data-testid selectors
 const extractListingCards = ($) => {
     const cards = [];
-    const selectors =
-        'article, [data-testid*="card"], [data-testid*="result"], [class*="ResultCard"], [class*="card"]';
 
-    $(selectors)
-        .toArray()
-        .forEach((el) => {
+    // Priority 1: Use data-testid selectors
+    $('article[data-testid="property-card"]').each((_, el) => {
+        try {
+            const card = $(el);
+
+            const link = card.find('a[data-testid="property-card-link"]').attr('href');
+            const url = toAbsoluteUrl(link);
+            if (!url) return;
+
+            const title = cleanText(card.find('h3').text()) || 'Property';
+            const priceText = cleanText(card.find('[data-testid="property-card-price"]').text());
+            const { price, currency } = parsePrice(priceText);
+
+            const location = cleanText(card.find('[data-testid="property-card-location"]').text());
+            const bedrooms = numberFromText(card.find('[data-testid="property-card-spec-bedroom"]').text());
+            const bathrooms = numberFromText(card.find('[data-testid="property-card-spec-bathroom"]').text());
+            const areaText = cleanText(card.find('[data-testid="property-card-spec-area"]').text());
+            const area = numberFromText(areaText);
+            const areaUnit = areaText?.match(/sq ?ft|ft2/i)?.[0] || areaText?.match(/m2|sqm/i)?.[0] || null;
+
+            cards.push({
+                title, price, currency, location,
+                bedrooms, bathrooms, area, areaUnit, url
+            });
+        } catch (err) {
+            log.debug('Failed to extract card', { error: err.message });
+        }
+    });
+
+    // Fallback: Try generic selectors if no data-testid cards found
+    if (!cards.length) {
+        $('article, [class*="ResultCard"], [class*="card"]').each((_, el) => {
             try {
                 const card = $(el);
-                const link = card.find('a[href*="/en/"]').first().attr('href') || card.attr('href');
+                const link = card.find('a[href*="/en/"]').first().attr('href');
                 const url = toAbsoluteUrl(link);
                 if (!url) return;
 
-                const title =
-                    cleanText(
-                        card
-                            .find('h2, h3, [class*="title"], [data-testid*="title"]')
-                            .first()
-                            .text(),
-                    ) || 'Property';
-
-                const priceText =
-                    cleanText(card.find('[data-testid*="price"], [class*="price"]').first().text()) || '';
+                const title = cleanText(card.find('h2, h3, [class*="title"]').first().text()) || 'Property';
+                const priceText = cleanText(card.find('[class*="price"]').first().text()) || '';
                 const { price, currency } = parsePrice(priceText);
-
-                const location =
-                    cleanText(
-                        card
-                            .find('[data-testid*="location"], [class*="location"], [class*="address"]')
-                            .first()
-                            .text(),
-                    ) || null;
-
-                const bedrooms = numberFromText(
-                    card.find('[data-testid*="bed"], [class*="bed"]').first().text(),
-                );
-                const bathrooms = numberFromText(
-                    card.find('[data-testid*="bath"], [class*="bath"]').first().text(),
-                );
-
-                const areaText = cleanText(
-                    card.find('[data-testid*="area"], [class*="area"], [class*="sqft"], [class*="meter"]').first()
-                        .text(),
-                );
+                const location = cleanText(card.find('[class*="location"], [class*="address"]').first().text());
+                const bedrooms = numberFromText(card.find('[class*="bed"]').first().text());
+                const bathrooms = numberFromText(card.find('[class*="bath"]').first().text());
+                const areaText = cleanText(card.find('[class*="area"], [class*="sqft"]').first().text());
                 const area = numberFromText(areaText);
-                const areaUnit =
-                    (areaText && (areaText.match(/sq ?ft|ft2/i)?.[0] || areaText.match(/m2|sqm|sq ?m/i)?.[0])) ||
-                    null;
-
-                const agentName = cleanText(
-                    card.find('[data-testid*="agent"], [class*="agent"]').first().text(),
-                );
+                const areaUnit = areaText?.match(/sq ?ft|ft2/i)?.[0] || areaText?.match(/m2|sqm/i)?.[0] || null;
 
                 cards.push({
-                    title,
-                    price,
-                    currency,
-                    location,
-                    bedrooms,
-                    bathrooms,
-                    area,
-                    areaUnit,
-                    agentName,
-                    url,
+                    title, price, currency, location,
+                    bedrooms, bathrooms, area, areaUnit, url
                 });
             } catch (err) {
-                log.debug('Failed to extract card', { error: err.message });
+                log.debug('Failed to extract fallback card', { error: err.message });
             }
         });
+    }
 
     return cards;
-};
-
-// Extract listings from embedded JSON when markup is empty (e.g., Next.js __NEXT_DATA__)
-const extractListingsFromEmbeddedJson = (html) => {
-    const results = [];
-    const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
-    let match;
-
-    const candidates = [];
-    while ((match = scriptRegex.exec(html)) !== null) {
-        const content = match[1];
-        if (!content) continue;
-        if (content.includes('__NEXT_DATA__') || content.includes('pageProps') || content.trim().startsWith('{')) {
-            candidates.push(content.trim());
-        }
-    }
-
-    const maybeListingsFromObj = (obj) => {
-        if (!obj || typeof obj !== 'object') return;
-        for (const value of Object.values(obj)) {
-            if (Array.isArray(value)) {
-                if (!value.length || typeof value[0] !== 'object') continue;
-                const first = value[0];
-                const keys = Object.keys(first).map((k) => k.toLowerCase());
-                const hasPrice = keys.some((k) => k.includes('price'));
-                const hasTitle = keys.some((k) => k.includes('title') || k === 'name');
-                const hasUrl = keys.some((k) => k.includes('url') || k === 'slug');
-                if (hasPrice && hasUrl && hasTitle) {
-                    for (const item of value) {
-                        const url =
-                            item.url ||
-                            item.link ||
-                            (item.slug ? `https://www.propertyfinder.ae${item.slug}` : null);
-                        results.push({
-                            title: item.title || item.name || item.description,
-                            price: numberFromText(item.price || item.priceValue || item.amount),
-                            currency: item.currency || 'AED',
-                            location:
-                                item.location?.name ||
-                                item.location ||
-                                item.city ||
-                                item.community ||
-                                null,
-                            bedrooms: item.bedrooms || item.beds || item.rooms,
-                            bathrooms: item.bathrooms || item.baths,
-                            area: item.area || item.builtupArea || item.size,
-                            areaUnit: item.areaUnit || item.area_unit || null,
-                            agentName: item.contactName || item.agent?.name || null,
-                            url: toAbsoluteUrl(url),
-                        });
-                    }
-                }
-            } else if (typeof value === 'object') {
-                maybeListingsFromObj(value);
-            }
-        }
-    };
-
-    for (const content of candidates) {
-        try {
-            const cleaned = content.replace(/^window\.__NEXT_DATA__\s*=\s*/, '').trim().replace(/;$/, '');
-            const parsed = JSON.parse(cleaned);
-            maybeListingsFromObj(parsed);
-            if (results.length) break;
-        } catch {
-            continue;
-        }
-    }
-
-    return results;
 };
 
 const extractJsonLd = ($) => {
@@ -250,14 +210,14 @@ const extractDetailFromHtml = ($, url) => {
     const priceText =
         cleanText(
             $('[data-testid*="price"], [class*="price"]').first().text() ||
-                $('meta[itemprop="price"]').attr('content'),
+            $('meta[itemprop="price"]').attr('content'),
         ) || '';
     const { price, currency } = parsePrice(priceText);
 
     const location =
         cleanText(
             $('[data-testid*="location"], [class*="location"], [class*="address"]').first().text() ||
-                $('meta[itemprop="address"]').attr('content'),
+            $('meta[itemprop="address"]').attr('content'),
         ) || null;
 
     const bedrooms = numberFromText(
@@ -270,7 +230,7 @@ const extractDetailFromHtml = ($, url) => {
     const areaText =
         cleanText(
             $('[data-testid*="area"], [class*="area"], [class*="sqft"], [class*="meter"]').first().text() ||
-                $('[itemprop="floorSize"]').text(),
+            $('[itemprop="floorSize"]').text(),
         ) || '';
     const area = numberFromText(areaText);
     const areaUnit =
@@ -283,13 +243,13 @@ const extractDetailFromHtml = ($, url) => {
     const postedDate =
         cleanText(
             $('[data-testid*="posted"], [class*="posted"], [class*="date"]').first().text() ||
-                $('meta[itemprop="datePosted"]').attr('content'),
+            $('meta[itemprop="datePosted"]').attr('content'),
         ) || null;
 
     const description =
         cleanText(
             $('[data-testid*="description"], [class*="description"]').text() ||
-                $('meta[name="description"]').attr('content'),
+            $('meta[name="description"]').attr('content'),
         ) || null;
 
     return {
@@ -308,39 +268,19 @@ const extractDetailFromHtml = ($, url) => {
     };
 };
 
-const fetchDetailWithCheerio = async (url, proxyInfo) => {
-    const options = {
+const fetchDetailWithCheerio = async (url, proxyUrl) => {
+    const $ = load(await Actor.sendRequest({
         url,
+        proxyUrl,
         headers: {
-            'user-agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
             'accept-language': 'en-US,en;q=0.9',
         },
-        timeout: 30000,
-    };
-    if (proxyInfo?.url) {
-        options.proxyUrl = proxyInfo.url;
-    }
-    const response = await gotScraping(options);
-    const $ = load(response.body);
+    }).then(r => r.body));
+
     const jsonLd = extractJsonLd($) || {};
     const htmlData = extractDetailFromHtml($, url);
     return { ...htmlData, ...jsonLd, url };
-};
-
-const fetchListingHtml = async (url, proxyInfo) => {
-    const options = {
-        url,
-        headers: {
-            'user-agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
-            'accept-language': 'en-US,en;q=0.9',
-        },
-        timeout: 30000,
-    };
-    if (proxyInfo?.url) options.proxyUrl = proxyInfo.url;
-    const response = await gotScraping(options);
-    return response.body;
 };
 
 await Actor.init();
@@ -371,15 +311,16 @@ async function main() {
     const MAX_PAGES = Number.isFinite(+maxPagesRaw) ? Math.max(1, +maxPagesRaw) : 20;
 
     let proxyConfig;
-    let proxyInfo;
+    let proxyUrl;
     try {
         proxyConfig = await Actor.createProxyConfiguration(proxyConfiguration || {});
-        proxyInfo = await proxyConfig.newProxyInfo();
+        const proxyInfo = await proxyConfig.newProxyInfo();
+        proxyUrl = proxyInfo?.url;
     } catch (err) {
         log.warning('Proxy configuration invalid; proceeding without proxy', { error: err.message });
     }
 
-    log.info('Starting PropertyFinder scraper (Playwright listings + HTTP detail)', {
+    log.info('Starting PropertyFinder scraper (HTTP + JSON extraction)', {
         categoryType,
         propertyType,
         location,
@@ -392,71 +333,30 @@ async function main() {
     const enqueuedPages = new Set();
     let totalSaved = 0;
 
-    const crawler = new PlaywrightCrawler({
+    const crawler = new CheerioCrawler({
         proxyConfiguration: proxyConfig,
-        headless: true,
-        maxConcurrency: 3,
-        maxRequestRetries: 2,
-        navigationTimeoutSecs: 35,
+        maxConcurrency: 5,
+        maxRequestRetries: 3,
         requestHandlerTimeoutSecs: 90,
-        launchContext: {
-            launcher: chromium,
-            launchOptions: {
-                headless: true,
-                args: [
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-features=IsolateOrigins,site-per-process',
-                ],
-            },
-        },
-        preNavigationHooks: [
-            async ({ page, request }) => {
-                await page.route('**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2}', (route) => route.abort());
-                page.setDefaultNavigationTimeout(45000);
-                page.setDefaultTimeout(45000);
-                await page.context().setExtraHTTPHeaders({
-                    'accept-language': 'en-US,en;q=0.9',
-                    'user-agent':
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
-                });
-                log.info('Navigating', { url: request.url });
-            },
-        ],
-        async requestHandler({ page, request, crawler }) {
+
+        async requestHandler({ $, request, body }) {
             const pageNo = request.userData.pageNo || 1;
-            let html;
-            try {
-                await page.goto(request.url, { waitUntil: 'networkidle', timeout: 45000 });
-                await page.waitForTimeout(2000);
-                html = await page.content();
-            } catch (err) {
-                log.warning('Playwright navigation failed, falling back to HTTP', { url: request.url, error: err.message });
-                try {
-                    html = await fetchListingHtml(request.url, proxyInfo);
-                } catch (httpErr) {
-                    log.warning('HTTP fallback failed for listing', { url: request.url, error: httpErr.message });
-                    throw err;
+            const html = body.toString();
+
+            // Priority 1: Try __NEXT_DATA__ extraction
+            let cards = extractNextData(html);
+
+            // Priority 2: Fallback to HTML parsing
+            if (!cards || !cards.length) {
+                cards = extractListingCards($);
+                if (cards.length) {
+                    log.info('Extracted cards from HTML', { count: cards.length, pageNo });
                 }
             }
 
-            const $ = load(html);
-            let cards = extractListingCards($);
-
-            if (!cards.length) {
-                const embeddedListings = extractListingsFromEmbeddedJson(html);
-                if (embeddedListings.length) {
-                    cards = embeddedListings;
-                    log.info('Extracted listings from embedded JSON', {
-                        count: embeddedListings.length,
-                        pageNo,
-                    });
-                }
-            }
-
-            if (!cards.length) {
-                log.warning('No cards found even with JS', { url: request.url, pageNo });
+            if (!cards || !cards.length) {
+                log.warning('No cards found on page', { url: request.url, pageNo });
+                return;
             }
 
             for (const card of cards) {
@@ -481,12 +381,15 @@ async function main() {
                 }
 
                 try {
-                    const detailData = await fetchDetailWithCheerio(card.url, proxyInfo);
+                    const detailData = await fetchDetailWithCheerio(card.url, proxyUrl);
                     const record = { ...baseRecord, ...detailData };
                     await Actor.pushData(record);
                     totalSaved++;
+                    log.info('Saved property', { url: card.url, totalSaved });
                 } catch (err) {
-                    log.warning('Detail fetch failed', { url: card.url, error: err.message });
+                    log.warning('Detail fetch failed, saving listing data only', { url: card.url, error: err.message });
+                    await Actor.pushData(baseRecord);
+                    totalSaved++;
                 }
 
                 if (totalSaved >= RESULTS_WANTED) {
@@ -496,6 +399,7 @@ async function main() {
                 }
             }
 
+            // Pagination
             if (pageNo < MAX_PAGES && totalSaved < RESULTS_WANTED) {
                 const nextPage = pageNo + 1;
                 const nextUrl = buildSearchUrl({
@@ -508,7 +412,7 @@ async function main() {
                 if (!enqueuedPages.has(nextUrl)) {
                     enqueuedPages.add(nextUrl);
                     await crawler.addRequests([{ url: nextUrl, userData: { pageNo: nextPage } }]);
-                    log.info('Enqueued next page', { nextPage });
+                    log.info('Enqueued next page', { nextPage, url: nextUrl });
                 }
             }
         },
@@ -522,6 +426,8 @@ async function main() {
         page: 1,
     });
     enqueuedPages.add(initialUrl);
+
+    log.info('Starting with URL', { url: initialUrl });
 
     await crawler.run([
         {
