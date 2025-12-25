@@ -79,18 +79,6 @@ Configure the scraper using these parameters:
       <td>Maximum price in AED</td>
       <td>2000000</td>
     </tr>
-    <tr>
-      <td><code>minBedrooms</code></td>
-      <td>Integer</td>
-      <td>Minimum number of bedrooms</td>
-      <td>2</td>
-    </tr>
-    <tr>
-      <td><code>maxBedrooms</code></td>
-      <td>Integer</td>
-      <td>Maximum number of bedrooms</td>
-      <td>4</td>
-    </tr>
   </tbody>
 </table>
 
@@ -142,8 +130,6 @@ Configure the scraper using these parameters:
   "categoryType": 1,
   "minPrice": 1000000,
   "maxPrice": 3000000,
-  "minBedrooms": 2,
-  "maxBedrooms": 3,
   "results_wanted": 100,
   "collectDetails": true,
   "proxyConfiguration": {
@@ -189,8 +175,6 @@ Configure the scraper using these parameters:
   "propertyType": "apartment",
   "location": "abu-dhabi",
   "categoryType": 2,
-  "minBedrooms": 1,
-  "maxBedrooms": 2,
   "maxPrice": 100000,
   "results_wanted": 150
 }

@@ -53,22 +53,6 @@
       "editor": "number",
       "minimum": 0
     },
-    "minBedrooms": {
-      "title": "Minimum Bedrooms",
-      "type": "integer",
-      "description": "Minimum number of bedrooms",
-      "editor": "number",
-      "minimum": 0,
-      "maximum": 10
-    },
-    "maxBedrooms": {
-      "title": "Maximum Bedrooms",
-      "type": "integer",
-      "description": "Maximum number of bedrooms",
-      "editor": "number",
-      "minimum": 0,
-      "maximum": 10
-    },
     "results_wanted": {
       "title": "Maximum number of properties",
       "type": "integer",

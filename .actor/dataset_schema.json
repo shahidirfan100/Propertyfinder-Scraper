@@ -54,6 +54,15 @@
             "format": "text"
           },
           "postedDate": {
+            "label": "Posted Date",
+            "format": "date"
+          },
+          "url": {
+            "label": "URL",
+            "format": "link"
+          }
+        }
+      }
     }
   }
 }
