@@ -33,9 +33,8 @@
       "title": "Category Type",
       "type": "integer",
       "description": "1 = For Sale, 2 = For Rent",
-      "editor": "select",
+      "editor": "number",
       "enum": [1, 2],
-      "enumTitles": ["For Sale", "For Rent"],
       "default": 1,
       "prefill": 1
     },

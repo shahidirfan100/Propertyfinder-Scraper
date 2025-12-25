@@ -1,11 +1,16 @@
 {
-    "actorOutputSchemaVersion": 1,
-    "title": "Output schema",
-    "properties": {
-        "overview": {
-            "type": "string",
-            "title": "Overview",
-            "template": "{{links.apiDefaultDatasetUrl}}/items?view=overview"
-        }
+  "actorOutputSchemaVersion": 1,
+  "title": "PropertyFinder Scraper Output",
+  "properties": {
+    "dataset": {
+      "type": "string",
+      "title": "Dataset",
+      "template": "{{links.apiDefaultDatasetUrl}}/items"
+    },
+    "keyValueStore": {
+      "type": "string",
+      "title": "Key-Value Store",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/keys"
     }
+  }
 }
