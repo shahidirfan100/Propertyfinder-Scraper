@@ -1,0 +1,110 @@
+{
+  "title": "PropertyFinder Scraper",
+  "description": "Scrape properties for sale or rent from PropertyFinder.ae. Provide search criteria or a direct PropertyFinder search URL.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrl": {
+      "title": "Start URL",
+      "type": "string",
+      "description": "Start scraping from a specific PropertyFinder.ae search URL. If provided, this overrides other search parameters.",
+      "editor": "textfield",
+      "example": "https://www.propertyfinder.ae/en/search?page=1&c=1&fu=0&ob=mr"
+    },
+    "propertyType": {
+      "title": "Property Type",
+      "type": "string",
+      "description": "Type of property to search for",
+      "editor": "select",
+      "enum": ["apartment", "villa", "townhouse", "penthouse", "land", "warehouse", "office", "shop", "duplex", "compound"],
+      "enumTitles": ["Apartment", "Villa", "Townhouse", "Penthouse", "Land", "Warehouse", "Office", "Shop", "Duplex", "Compound"],
+      "default": "apartment",
+      "prefill": "apartment"
+    },
+    "location": {
+      "title": "Location",
+      "type": "string",
+      "description": "Location to search in (e.g., 'dubai', 'abu-dhabi', 'sharjah')",
+      "editor": "textfield",
+      "default": "dubai",
+      "prefill": "dubai"
+    },
+    "categoryType": {
+      "title": "Category Type",
+      "type": "integer",
+      "description": "1 = For Sale, 2 = For Rent",
+      "editor": "select",
+      "enum": [1, 2],
+      "enumTitles": ["For Sale", "For Rent"],
+      "default": 1,
+      "prefill": 1
+    },
+    "minPrice": {
+      "title": "Minimum Price (AED)",
+      "type": "integer",
+      "description": "Minimum property price in AED",
+      "editor": "number",
+      "minimum": 0
+    },
+    "maxPrice": {
+      "title": "Maximum Price (AED)",
+      "type": "integer",
+      "description": "Maximum property price in AED",
+      "editor": "number",
+      "minimum": 0
+    },
+    "minBedrooms": {
+      "title": "Minimum Bedrooms",
+      "type": "integer",
+      "description": "Minimum number of bedrooms",
+      "editor": "number",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "maxBedrooms": {
+      "title": "Maximum Bedrooms",
+      "type": "integer",
+      "description": "Maximum number of bedrooms",
+      "editor": "number",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "results_wanted": {
+      "title": "Maximum number of properties",
+      "type": "integer",
+      "description": "Maximum number of properties to collect. Leave empty to collect all available.",
+      "minimum": 1,
+      "default": 100,
+      "prefill": 100,
+      "editor": "number"
+    },
+    "max_pages": {
+      "title": "Maximum number of pages",
+      "type": "integer",
+      "description": "Safety cap on the number of search result pages to visit.",
+      "minimum": 1,
+      "maximum": 100,
+      "editor": "number",
+      "default": 20,
+      "prefill": 20
+    },
+    "collectDetails": {
+      "title": "Collect property details",
+      "type": "boolean",
+      "description": "If enabled, scraper visits each property detail page for complete information.",
+      "editor": "checkbox",
+      "default": true
+    },
+    "proxyConfiguration": {
+      "title": "Proxy configuration",
+      "type": "object",
+      "description": "Proxy settings for anti-bot protection. Use Apify Proxy for best results.",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"]
+      }
+    }
+  },
+  "required": []
+}

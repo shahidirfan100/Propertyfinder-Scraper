@@ -1,0 +1,59 @@
+{
+  "actorSpecification": 1,
+  "fields": {},
+  "views": {
+    "overview": {
+      "title": "Overview",
+      "transformation": {
+        "fields": [
+          "title",
+          "propertyType",
+          "price",
+          "location",
+          "bedrooms",
+          "bathrooms",
+          "area",
+          "agentName",
+          "postedDate",
+          "url"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "title": {
+            "label": "Property Title",
+            "format": "text"
+          },
+          "propertyType": {
+            "label": "Type",
+            "format": "text"
+          },
+          "price": {
+            "label": "Price (AED)",
+            "format": "text"
+          },
+          "location": {
+            "label": "Location",
+            "format": "text"
+          },
+          "bedrooms": {
+            "label": "Beds",
+            "format": "number"
+          },
+          "bathrooms": {
+            "label": "Baths",
+            "format": "number"
+          },
+          "area": {
+            "label": "Area (sqft)",
+            "format": "text"
+          },
+          "agentName": {
+            "label": "Agent",
+            "format": "text"
+          },
+          "postedDate": {
+    }
+  }
+}
