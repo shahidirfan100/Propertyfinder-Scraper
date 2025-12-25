@@ -8,6 +8,14 @@
   PropertyFinder.ae is the largest property portal in the UAE with over 500,000 listings. This scraper helps you gather market intelligence, track pricing trends, monitor inventory, and analyze real estate data at scale.
 </p>
 
+## How it works (fast & stealthy)
+
+- HTTP-first with CheerioCrawler (no browser by default) for low cost and lower block rates.
+- Tries inline JSON/JSON-LD first; falls back to resilient HTML selectors.
+- Deduplicates listing URLs and optionally opens detail pages only when you ask for full data.
+- Respects `results_wanted` + `max_pages` caps and uses session pool + smart headers for stealth.
+- Provide either a full `startUrl` or a `location` (e.g., `dubai`); the actor builds clean `/buy|/rent` search URLs automatically.
+
 ## What data can you extract?
 
 The PropertyFinder Scraper extracts comprehensive property information:

@@ -9,10 +9,12 @@
           "title",
           "propertyType",
           "price",
+          "currency",
           "location",
           "bedrooms",
           "bathrooms",
           "area",
+          "areaUnit",
           "agentName",
           "postedDate",
           "url"
@@ -31,6 +33,10 @@
           },
           "price": {
             "label": "Price (AED)",
+            "format": "number"
+          },
+          "currency": {
+            "label": "Currency",
             "format": "text"
           },
           "location": {
@@ -47,6 +53,10 @@
           },
           "area": {
             "label": "Area (sqft)",
+            "format": "number"
+          },
+          "areaUnit": {
+            "label": "Area Unit",
             "format": "text"
           },
           "agentName": {
