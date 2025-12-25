@@ -268,6 +268,13 @@ async function main() {
         : Number.MAX_SAFE_INTEGER;
     const MAX_PAGES = Number.isFinite(+maxPagesRaw) ? Math.max(1, +maxPagesRaw) : 20;
 
+    let proxyConfig;
+    try {
+        proxyConfig = await Actor.createProxyConfiguration(proxyConfiguration || {});
+    } catch (err) {
+        log.warning('Proxy configuration invalid; proceeding without proxy', { error: err.message });
+    }
+
     log.info('Starting PropertyFinder scraper (HTTP/JSON-first)', {
         categoryType,
         propertyType,
@@ -374,7 +381,7 @@ async function main() {
         requestHandler: router,
         useSessionPool: true,
         persistCookiesPerSession: true,
-        proxyConfiguration,
+        proxyConfiguration: proxyConfig,
         maxConcurrency: 12,
         minConcurrency: 5,
         maxRequestRetries: 3,
