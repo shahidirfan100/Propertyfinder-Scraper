@@ -1,7 +1,6 @@
-// PropertyFinder.ae scraper - Production-ready implementation
+// PropertyFinder.ae scraper - JavaScript-enabled version using PlaywrightCrawler
 import { Actor, log } from 'apify';
-import { CheerioCrawler, Dataset } from 'crawlee';
-import { gotScraping } from 'got-scraping';
+import { PlaywrightCrawler, Dataset } from 'crawlee';
 
 await Actor.init();
 
@@ -31,7 +30,7 @@ async function main() {
             ? Math.max(1, +MAX_PAGES_RAW) 
             : 20;
 
-        log.info('Starting PropertyFinder scraper', {
+        log.info('Starting PropertyFinder scraper (JS-enabled)', {
             propertyType,
             location,
             categoryType,
@@ -40,7 +39,7 @@ async function main() {
         });
 
         /**
-         * Build search URL from parameters
+         * Build search URL
          */
         const buildSearchUrl = (page = 1) => {
             if (startUrl) {
@@ -62,20 +61,7 @@ async function main() {
         };
 
         /**
-         * Convert relative URL to absolute
-         */
-        const toAbsoluteUrl = (href, base = 'https://www.propertyfinder.ae') => {
-            if (!href) return null;
-            try {
-                if (href.startsWith('http')) return href;
-                return new URL(href, base).href;
-            } catch {
-                return null;
-            }
-        };
-
-        /**
-         * Clean and normalize text
+         * Clean text helper
          */
         const cleanText = (text) => {
             if (!text) return null;
@@ -87,158 +73,25 @@ async function main() {
          */
         const extractNumber = (text) => {
             if (!text) return null;
-            const match = String(text).match(/(\d+)/);
-            return match ? parseInt(match[1], 10) : null;
+            const match = String(text).match(/\d+/);
+            return match ? parseInt(match[0]) : null;
         };
 
         /**
-         * Try to find and use internal API
-         * PropertyFinder might have GraphQL or REST endpoints
+         * Convert relative to absolute URL
          */
-        const tryApiExtraction = async (url, proxyUrl) => {
+        const toAbsoluteUrl = (href) => {
+            if (!href) return null;
             try {
-                // Check for Next.js data or GraphQL endpoints
-                const apiUrls = [
-                    url.replace('/en/search', '/api/search'),
-                    url.replace('/en/search', '/_next/data'),
-                ];
-
-                for (const apiUrl of apiUrls) {
-                    try {
-                        const response = await gotScraping({
-                            url: apiUrl,
-                            responseType: 'json',
-                            proxyUrl,
-                            headers: {
-                                'accept': 'application/json',
-                                'referer': url,
-                            },
-                        });
-
-                        if (response.body && typeof response.body === 'object') {
-                            log.info(`Found API endpoint: ${apiUrl}`);
-                            return response.body;
-                        }
-                    } catch (err) {
-                        log.debug(`API endpoint ${apiUrl} failed: ${err.message}`);
-                    }
-                }
-            } catch (err) {
-                log.debug('API extraction failed, falling back to HTML');
+                if (href.startsWith('http')) return href;
+                return new URL(href, 'https://www.propertyfinder.ae').href;
+            } catch {
+                return null;
             }
-            return null;
         };
 
         /**
-         * Extract property links from listing page
-         */
-        const extractPropertyLinks = ($) => {
-            const links = new Set();
-            
-            // Multiple selector strategies for robustness
-            const selectors = [
-                'a[href*="/plp/buy/"]',
-                'a[href*="/plp/rent/"]',
-                'a[href*="for-sale"]',
-                'a[href*="for-rent"]',
-                '[data-testid="property-card"] a',
-                '.property-card a',
-                'article a',
-            ];
-
-            selectors.forEach(selector => {
-                $(selector).each((_, el) => {
-                    const href = $(el).attr('href');
-                    if (href && (href.includes('/plp/') || href.includes('for-sale') || href.includes('for-rent'))) {
-                        const absUrl = toAbsoluteUrl(href);
-                        if (absUrl) links.add(absUrl);
-                    }
-                });
-            });
-
-            return Array.from(links);
-        };
-
-        /**
-         * Extract basic property info from listing card
-         */
-        const extractPropertyFromCard = ($card) => {
-            // Extract title
-            const title = cleanText(
-                $card.find('h2, h3, [class*="title"], [data-testid="title"]').first().text()
-            );
-
-            // Extract price
-            const priceText = cleanText(
-                $card.find('[class*="price"], [data-testid="price"]').first().text()
-            );
-
-            // Extract location
-            const locationText = cleanText(
-                $card.find('[class*="location"], [data-testid="location"]').first().text()
-            );
-
-            // Extract bedrooms, bathrooms, area
-            let bedrooms = null;
-            let bathrooms = null;
-            let area = null;
-
-            $card.find('[class*="bed"], [class*="bath"], [class*="area"], [class*="sqft"]').each((_, el) => {
-                const text = $(el).text();
-                const icon = $(el).find('svg, img, i').attr('class') || '';
-                
-                if (text.includes('bed') || icon.includes('bed')) {
-                    bedrooms = extractNumber(text);
-                } else if (text.includes('bath') || icon.includes('bath')) {
-                    bathrooms = extractNumber(text);
-                } else if (text.includes('sqft') || text.includes('sq ft') || icon.includes('area')) {
-                    area = cleanText(text);
-                }
-            });
-
-            // Extract agent info
-            const agentName = cleanText(
-                $card.find('[class*="agent"], [data-testid="agent"]').first().text()
-            );
-
-            // Extract posted date
-            const postedDate = cleanText(
-                $card.find('[class*="listed"], [class*="posted"], [class*="date"]').first().text()
-            );
-
-            // Extract URL
-            const url = toAbsoluteUrl($card.find('a').first().attr('href'));
-
-            return {
-                title,
-                propertyType: propertyType || 'Property',
-                price: priceText,
-                location: locationText,
-                bedrooms,
-                bathrooms,
-                area,
-                agentName,
-                postedDate,
-                url,
-            };
-        };
-
-        /**
-         * Extract property details from detail page
-         */
-        const extractPropertyDetails = ($, url) => {
-            // Try JSON-LD first (Priority 1)
-            const jsonLd = extractJsonLd($);
-            if (jsonLd && (jsonLd.title || jsonLd.price)) {
-                return { ...jsonLd, url };
-            }
-
-            // Fallback to HTML parsing (Priority 2)
-            return extractFromHtml($, url);
-        };
-
-        /**
-         * Extract data from JSON-LD structured data (Priority 1)
+         * Extract JSON-LD structured data
          */
         const extractJsonLd = ($) => {
             try {
@@ -249,48 +102,23 @@ async function main() {
                     if (!content) continue;
 
                     try {
-                        const data = JSON.parse(content);
-                        const items = Array.isArray(data) ? data : [data];
-
-                        for (const item of items) {
-                            if (!item) continue;
-                            const type = item['@type'] || item.type;
-                            
-                            // Check for real estate related types
-                            if (
-                                type === 'RealEstateListing' || 
-                                type === 'Product' || 
-                                type === 'Offer' || 
-                                type === 'Residence' ||
-                                type === 'Apartment' ||
-                                type === 'House'
-                            ) {
-                                const result = {
-                                    title: cleanText(item.name || item.title),
-                                    price: cleanText(item.price || item.offers?.price || item.offers?.[0]?.price),
-                                    location: cleanText(
-                                        item.address?.addressLocality || 
-                                        item.address?.streetAddress ||
-                                        item.address?.addressRegion
-                                    ),
-                                    description: cleanText(item.description),
-                                    propertyType: cleanText(item.category || item['@type']),
-                                    bedrooms: item.numberOfRooms || item.numberOfBedrooms || null,
-                                    bathrooms: item.numberOfBathroomsTotal || item.numberOfBathrooms || null,
-                                    area: cleanText(item.floorSize?.value || item.floorSize),
-                                    agentName: cleanText(item.provider?.name || item.seller?.name),
-                                    postedDate: cleanText(item.datePosted),
-                                };
-
-                                // Only return if we have meaningful data
-                                if (result.title || result.price) {
-                                    log.debug('Extracted data from JSON-LD');
-                                    return result;
-                                }
-                            }
+                        const jsonData = JSON.parse(content);
+                        if (jsonData['@type'] === 'RealEstateListing' || jsonData.offers) {
+                            return {
+                                title: jsonData.name,
+                                price: jsonData.offers?.price ? parseInt(jsonData.offers.price) : null,
+                                location: jsonData.address?.addressLocality,
+                                url: jsonData.url,
+                                bedrooms: jsonData.numberOfRooms,
+                                bathrooms: null,
+                                area: null,
+                                agentName: null,
+                                postedDate: jsonData.datePosted,
+                                propertyType: 'Property',
+                            };
                         }
                     } catch (parseErr) {
-                        log.debug('JSON-LD parse error', { error: parseErr.message });
+                        continue;
                     }
                 }
             } catch (err) {
@@ -300,7 +128,7 @@ async function main() {
         };
 
         /**
-         * Extract data from HTML when JSON-LD is not available (Priority 2)
+         * Extract data from HTML
          */
         const extractFromHtml = ($, url) => {
             // Title
@@ -310,257 +138,259 @@ async function main() {
             );
 
             // Price
-            const price = cleanText(
+            const priceText = cleanText(
                 $('[class*="price"]').first().text() ||
-                $('[data-testid="price"]').first().text()
+                $('[data-testid*="price"]').first().text()
             );
+            const price = priceText ? parseInt(priceText.replace(/[^\d]/g, '')) || null : null;
 
             // Location
             const location = cleanText(
                 $('[class*="location"]').first().text() ||
-                $('[data-testid="location"]').first().text()
+                $('[data-testid*="location"]').first().text()
             );
 
-            // Description
-            const description = cleanText(
-                $('[class*="description"]').first().text() ||
-                $('[data-testid="description"]').first().text()
+            // Bedrooms
+            const bedroomText = cleanText(
+                $('[class*="bed"]').first().text() ||
+                $('[data-testid*="bed"]').first().text()
             );
+            const bedrooms = extractNumber(bedroomText);
 
-            // Extract specs
-            let bedrooms = null;
-            let bathrooms = null;
-            let area = null;
-            let propertyType = null;
-            let agentName = null;
-            let postedDate = null;
-
-            // Try to find property features
-            $('[class*="property-"], [class*="feature"], [class*="spec"], [data-testid*="spec"]').each((_, el) => {
-                const text = $(el).text().toLowerCase();
-                const fullText = $(el).text();
-                
-                if (text.includes('bed') && !bedrooms) {
-                    bedrooms = extractNumber(fullText);
-                }
-                if (text.includes('bath') && !bathrooms) {
-                    bathrooms = extractNumber(fullText);
-                }
-                if ((text.includes('sqft') || text.includes('sq ft')) && !area) {
-                    area = cleanText(fullText);
-                }
-            });
-
-            // Property type
-            propertyType = cleanText(
-                $('[class*="property-type"]').first().text() ||
-                $('[data-testid="property-type"]').first().text()
+            // Bathrooms
+            const bathroomText = cleanText(
+                $('[class*="bath"]').first().text() ||
+                $('[data-testid*="bath"]').first().text()
             );
+            const bathrooms = extractNumber(bathroomText);
 
-            // Agent info
-            agentName = cleanText(
+            // Area
+            const areaText = cleanText(
+                $('[class*="area"], [class*="sqft"]').first().text() ||
+                $('[data-testid*="area"]').first().text()
+            );
+            const area = areaText ? parseInt(areaText.replace(/[^\d]/g, '')) || null : null;
+
+            // Agent name
+            const agentName = cleanText(
                 $('[class*="agent"]').first().text() ||
-                $('[data-testid="agent"]').first().text()
+                $('[data-testid*="agent"]').first().text()
             );
 
             // Posted date
-            postedDate = cleanText(
-                $('[class*="listed"], [class*="posted"], [class*="date"]').first().text() ||
-                $('[data-testid="posted-date"]').first().text()
+            const postedDate = cleanText(
+                $('[class*="posted"], [class*="date"]').first().text()
             );
-
-            log.debug('Extracted data from HTML parsing');
 
             return {
                 title,
-                propertyType: propertyType || propertyType,
                 price,
                 location,
-                description,
                 bedrooms,
                 bathrooms,
                 area,
                 agentName,
                 postedDate,
                 url,
+                propertyType: 'Property',
             };
         };
 
-        // Setup proxy configuration
-        const proxyConf = proxyConfiguration 
-            ? await Actor.createProxyConfiguration({ ...proxyConfiguration }) 
-            : undefined;
+        /**
+         * Extract property card data from listing page
+         */
+        const extractListingData = ($) => {
+            const properties = [];
 
-        let savedCount = 0;
-        const seenUrls = new Set();
+            // Find all property cards
+            const $cards = $('[class*="card"], [class*="listing"], article, [data-testid*="card"]');
 
-        // Initialize crawler with stealth settings
-        const crawler = new CheerioCrawler({
-            proxyConfiguration: proxyConf,
-            maxRequestRetries: 3,
-            useSessionPool: true,
-            maxConcurrency: 3, // Lower for stealth
-            requestHandlerTimeoutSecs: 90,
-            
-            // Add stealth headers
-            preNavigationHooks: [
-                async ({ request }, goToOptions) => {
-                    goToOptions.headers = {
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Accept-Encoding': 'gzip, deflate, br',
-                        'DNT': '1',
-                        'Connection': 'keep-alive',
-                        'Upgrade-Insecure-Requests': '1',
-                        'Sec-Fetch-Dest': 'document',
-                        'Sec-Fetch-Mode': 'navigate',
-                        'Sec-Fetch-Site': 'none',
-                        'Cache-Control': 'max-age=0',
-                        ...goToOptions.headers,
+            $cards.each((index, element) => {
+                try {
+                    const $card = $(element);
+                    
+                    // Extract link
+                    const $link = $card.find('a').first();
+                    const url = toAbsoluteUrl($link.attr('href'));
+                    
+                    if (!url) return;
+
+                    // Extract title
+                    const title = cleanText(
+                        $card.find('h2, [class*="title"]').first().text() ||
+                        $link.text()
+                    );
+
+                    // Extract price
+                    const priceText = cleanText(
+                        $card.find('[class*="price"]').first().text()
+                    );
+                    const price = priceText ? parseInt(priceText.replace(/[^\d]/g, '')) || null : null;
+
+                    // Extract location
+                    const location = cleanText(
+                        $card.find('[class*="location"]').first().text()
+                    );
+
+                    // Extract bedrooms/bathrooms
+                    const specs = cleanText(
+                        $card.find('[class*="spec"], [class*="feature"]').text()
+                    );
+                    const bedrooms = specs ? extractNumber(specs) : null;
+
+                    const property = {
+                        title: title || 'Property',
+                        price,
+                        location: location || 'UAE',
+                        bedrooms,
+                        bathrooms: null,
+                        area: null,
+                        agentName: null,
+                        postedDate: null,
+                        url,
+                        propertyType: propertyType || 'Property',
                     };
-                },
-            ],
-            
-            async requestHandler({ request, $, enqueueLinks, log: crawlerLog }) {
-                const { label = 'LIST', pageNo = 1 } = request.userData;
 
-                // Handle listing pages
-                if (label === 'LIST') {
-                    crawlerLog.info(`Processing listing page ${pageNo}: ${request.url}`);
-                    
-                    // Try API first
-                    const proxyUrl = await proxyConf?.newUrl();
-                    const apiData = await tryApiExtraction(request.url, proxyUrl);
-                    
-                    if (apiData) {
-                        crawlerLog.info('Successfully extracted data from API');
-                        // Process API data if available
-                        // TODO: Implement API data processing based on actual API structure
+                    // Only add if has meaningful data
+                    if (title || price || location || url) {
+                        properties.push(property);
                     }
-                    
-                    // Extract property links
-                    const propertyLinks = extractPropertyLinks($);
-                    crawlerLog.info(`Found ${propertyLinks.length} property links on page ${pageNo}`);
-
-                    if (propertyLinks.length === 0) {
-                        crawlerLog.warning('No property links found - page structure may have changed');
-                    }
-
-                    if (collectDetails) {
-                        // Enqueue property detail pages
-                        const remaining = RESULTS_WANTED - savedCount;
-                        const linksToEnqueue = propertyLinks
-                            .filter(link => !seenUrls.has(link))
-                            .slice(0, Math.max(0, remaining));
-
-                        linksToEnqueue.forEach(link => seenUrls.add(link));
-
-                        if (linksToEnqueue.length > 0) {
-                            await enqueueLinks({
-                                urls: linksToEnqueue,
-                                userData: { label: 'DETAIL' },
-                            });
-                            crawlerLog.info(`Enqueued ${linksToEnqueue.length} detail pages`);
-                        }
-                    } else {
-                        // Extract basic info from listing cards
-                        const properties = [];
-                        
-                        $('article, [class*="card"], [data-testid*="card"]').each((_, card) => {
-                            if (savedCount >= RESULTS_WANTED) return false;
-                            
-                            const $card = $(card);
-                            const propUrl = $card.find('a').first().attr('href');
-                            
-                            if (propUrl) {
-                                const absUrl = toAbsoluteUrl(propUrl);
-                                if (absUrl && !seenUrls.has(absUrl)) {
-                                    seenUrls.add(absUrl);
-                                    const propInfo = extractPropertyFromCard($card);
-                                    if (propInfo.title || propInfo.price) {
-                                        properties.push(propInfo);
-                                        savedCount++;
-                                    }
-                                }
-                            }
-                        });
-
-                        if (properties.length > 0) {
-                            await Dataset.pushData(properties);
-                            crawlerLog.info(`Saved ${properties.length} properties from listing page`);
-                        } else {
-                            crawlerLog.warning('No properties extracted from listing page');
-                        }
-                    }
-
-                    // Handle pagination
-                    if (savedCount < RESULTS_WANTED && pageNo < MAX_PAGES) {
-                        const nextPageUrl = buildSearchUrl(pageNo + 1);
-                        await enqueueLinks({
-                            urls: [nextPageUrl],
-                            userData: { label: 'LIST', pageNo: pageNo + 1 },
-                        });
-                        crawlerLog.info(`Enqueued next page: ${pageNo + 1}`);
-                    } else {
-                        crawlerLog.info('Pagination complete', {
-                            reason: savedCount >= RESULTS_WANTED ? 'Results limit reached' : 'Max pages reached',
-                            savedCount,
-                            pageNo,
-                        });
-                    }
+                } catch (err) {
+                    log.warning('Failed to extract card', { error: err.message });
                 }
+            });
 
-                // Handle property detail pages
-                if (label === 'DETAIL') {
-                    if (savedCount >= RESULTS_WANTED) {
-                        crawlerLog.debug('Skipping detail page - results limit reached');
+            return properties;
+        };
+
+        // Track stats
+        let totalExtracted = 0;
+        const processedUrls = new Set();
+
+        // Create PlaywrightCrawler for JS handling
+        const crawler = new PlaywrightCrawler({
+            proxyConfiguration,
+            maxConcurrency: 1, // Single browser for stability
+            maxRequestsPerCrawl: RESULTS_WANTED,
+            requestHandlerTimeoutSecs: 60,
+            navigationTimeoutSecs: 30,
+
+            // Browser launch options for stealth
+            launchContext: {
+                launchOptions: {
+                    headless: true,
+                    args: [
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-web-resources',
+                    ],
+                },
+            },
+
+            async requestHandler({ request, page, $ }) {
+                const { pageNo = 1 } = request.userData;
+
+                try {
+                    log.info(`Processing page ${pageNo}: ${request.url}`);
+
+                    // Wait for content to load
+                    await page.waitForSelector('[class*="card"], article, [data-testid*="card"]', {
+                        timeout: 10000,
+                    }).catch(() => {
+                        log.warning('Could not find property cards - using available data');
+                    });
+
+                    // Get page content
+                    const html = await page.content();
+                    
+                    // Parse with cheerio
+                    const { load } = await import('cheerio');
+                    const cheerio$ = load(html);
+
+                    // Extract properties from listing
+                    const properties = extractListingData(cheerio$);
+
+                    if (properties.length === 0) {
+                        log.warning(`No properties found on page ${pageNo}`);
                         return;
                     }
 
-                    crawlerLog.info(`Processing property detail: ${request.url}`);
+                    log.info(`Extracted ${properties.length} properties from page ${pageNo}`);
 
-                    try {
-                        const propertyData = extractPropertyDetails($, request.url);
-                        
-                        if (propertyData && (propertyData.title || propertyData.price)) {
-                            await Dataset.pushData(propertyData);
-                            savedCount++;
-                            crawlerLog.info(`Saved property (${savedCount}/${RESULTS_WANTED}): ${propertyData.title || 'Untitled'}`);
-                        } else {
-                            crawlerLog.warning('No property data extracted from detail page');
+                    // Save each property
+                    for (const property of properties) {
+                        if (processedUrls.has(property.url)) continue;
+                        processedUrls.add(property.url);
+
+                        // Try to get more details from detail page if available
+                        if (collectDetails && property.url) {
+                            try {
+                                const detailPage = await page.goto(property.url, { 
+                                    waitUntil: 'domcontentloaded',
+                                    timeout: 30000,
+                                }).catch(() => null);
+
+                                if (detailPage) {
+                                    const detailHtml = await page.content();
+                                    const detail$ = load(detailHtml);
+                                    
+                                    // Try JSON-LD first
+                                    const jsonLdData = extractJsonLd(detail$);
+                                    if (jsonLdData && jsonLdData.title) {
+                                        Object.assign(property, jsonLdData);
+                                    } else {
+                                        // Fallback to HTML extraction
+                                        const htmlData = extractFromHtml(detail$, property.url);
+                                        if (htmlData && htmlData.title) {
+                                            Object.assign(property, htmlData);
+                                        }
+                                    }
+
+                                    // Go back to listing
+                                    await page.goBack({ waitUntil: 'domcontentloaded' }).catch(() => {});
+                                }
+                            } catch (detailErr) {
+                                log.debug('Failed to fetch detail page', { error: detailErr.message });
+                            }
                         }
-                    } catch (err) {
-                        crawlerLog.error(`Failed to extract property details: ${err.message}`);
-                    }
-                }
-            },
 
-            async failedRequestHandler({ request }, error) {
-                log.error(`Request ${request.url} failed after ${request.retryCount} retries`, { 
-                    error: error.message,
-                    url: request.url,
-                });
+                        // Save property
+                        await Actor.pushData(property);
+                        totalExtracted++;
+
+                        if (totalExtracted >= RESULTS_WANTED) {
+                            log.info('Reached results limit', { totalExtracted, RESULTS_WANTED });
+                            break;
+                        }
+                    }
+
+                    // Enqueue next page if needed
+                    if (totalExtracted < RESULTS_WANTED && pageNo < MAX_PAGES) {
+                        const nextPage = pageNo + 1;
+                        const nextUrl = buildSearchUrl(nextPage);
+
+                        await crawler.addRequests([{
+                            url: nextUrl,
+                            userData: { pageNo: nextPage },
+                        }]);
+
+                        log.info('Enqueued next page', { nextPage });
+                    }
+
+                } catch (err) {
+                    log.error('Handler error', { error: err.message, url: request.url });
+                    throw err;
+                }
             },
         });
 
         // Start crawling
         const initialUrl = buildSearchUrl(1);
-        log.info(`Starting from: ${initialUrl}`);
-        
         await crawler.run([{
             url: initialUrl,
-            userData: { label: 'LIST', pageNo: 1 },
+            userData: { pageNo: 1 },
         }]);
 
-        log.info(`Scraping complete. Total properties saved: ${savedCount}`);
-
-        if (savedCount === 0) {
-            log.warning('No properties were saved. This might indicate:');
-            log.warning('1. Website structure has changed');
-            log.warning('2. Anti-bot protection is blocking requests');
-            log.warning('3. Search parameters returned no results');
-            log.warning('4. Proxy configuration issues');
-        }
+        log.info('Scraping completed', { totalExtracted });
 
     } catch (err) {
         log.exception(err, 'Main function failed');
