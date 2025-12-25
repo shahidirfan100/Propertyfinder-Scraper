@@ -1,57 +1,6 @@
 {
   "actorSpecification": 1,
-  "fields": {
-    "type": "object",
-    "properties": {
-      "title": {
-        "type": "string",
-        "description": "Property title or name"
-      },
-      "propertyType": {
-        "type": "string",
-        "description": "Type of property (apartment, villa, etc.)"
-      },
-      "price": {
-        "type": "number",
-        "description": "Property price in AED"
-      },
-      "location": {
-        "type": "string",
-        "description": "Property location"
-      },
-      "bedrooms": {
-        "type": "number",
-        "description": "Number of bedrooms"
-      },
-      "bathrooms": {
-        "type": "number",
-        "description": "Number of bathrooms"
-      },
-      "area": {
-        "type": "number",
-        "description": "Property area in square feet"
-      },
-      "agentName": {
-        "type": "string",
-        "description": "Name of the real estate agent"
-      },
-      "postedDate": {
-        "type": "string",
-        "description": "Date when the property was posted"
-      },
-      "url": {
-        "type": "string",
-        "format": "uri",
-        "description": "URL to the property listing"
-      },
-      "sourceUrl": {
-        "type": "string",
-        "format": "uri",
-        "description": "URL of the page where the property was found"
-      }
-    },
-    "required": ["title", "url"]
-  },
+  "fields": {},
   "views": {
     "overview": {
       "title": "Overview",
