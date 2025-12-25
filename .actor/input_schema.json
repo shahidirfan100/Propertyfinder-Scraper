@@ -34,7 +34,6 @@
       "type": "integer",
       "description": "1 = For Sale, 2 = For Rent",
       "editor": "number",
-      "enum": [1, 2],
       "default": 1,
       "prefill": 1
     },
