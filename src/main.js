@@ -1,6 +1,6 @@
 // PropertyFinder.ae scraper - Fast HTTP + JSON extraction with Cheerio fallback
 import { Actor, log } from 'apify';
-import { CheerioCrawler } from 'crawlee';
+import { CheerioCrawler, sendRequest } from 'crawlee';
 import { load } from 'cheerio';
 
 const cleanText = (text) => {
@@ -8,6 +8,7 @@ const cleanText = (text) => {
     const cleaned = String(text).replace(/\s+/g, ' ').trim();
     return cleaned.length ? cleaned : null;
 };
+
 
 const toAbsoluteUrl = (href) => {
     if (!href) return null;
@@ -272,14 +273,15 @@ const extractDetailFromHtml = ($, url) => {
 };
 
 const fetchDetailWithCheerio = async (url, proxyUrl) => {
-    const $ = load(await Actor.sendRequest({
+    const { body } = await sendRequest({
         url,
         proxyUrl,
         headers: {
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
             'accept-language': 'en-US,en;q=0.9',
         },
-    }).then(r => r.body));
+    });
+    const $ = load(body);
 
     const jsonLd = extractJsonLd($) || {};
     const htmlData = extractDetailFromHtml($, url);
