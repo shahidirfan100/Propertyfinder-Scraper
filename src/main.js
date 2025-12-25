@@ -1,10 +1,10 @@
-// PropertyFinder.ae scraper - HTTP/JSON-first with Cheerio fallback for low cost and stealth
+// PropertyFinder.ae scraper - Playwright for listings, HTTP+Cheerio for detail pages
 import { Actor, log } from 'apify';
-import { CheerioCrawler, createCheerioRouter } from 'crawlee';
+import { PlaywrightCrawler } from 'crawlee';
 import { chromium } from 'playwright';
 import { load } from 'cheerio';
+import { gotScraping } from 'got-scraping';
 
-// Basic helpers
 const cleanText = (text) => {
     if (!text) return null;
     const cleaned = String(text).replace(/\s+/g, ' ').trim();
@@ -34,48 +34,6 @@ const parsePrice = (text) => {
     return { price, currency };
 };
 
-// Build Playwright proxy options from Apify proxy configuration
-const buildPlaywrightProxy = async (proxyConfig) => {
-    if (!proxyConfig) return undefined;
-    try {
-        const info = await proxyConfig.newProxyInfo();
-        if (!info?.url) return undefined;
-        const parsed = new URL(info.url);
-        return {
-            server: `${parsed.protocol}//${parsed.host}`,
-            username: parsed.username || undefined,
-            password: parsed.password || undefined,
-        };
-    } catch (err) {
-        log.debug('Failed to create Playwright proxy config', { error: err.message });
-        return undefined;
-    }
-};
-
-// Render a page with Playwright when HTML-only crawl yields nothing
-const renderWithPlaywright = async (url, proxyConfig) => {
-    const proxy = await buildPlaywrightProxy(proxyConfig);
-    const browser = await chromium.launch({
-        headless: true,
-        args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
-    });
-
-    try {
-        const context = await browser.newContext({
-            proxy,
-            userAgent:
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
-        });
-        const page = await context.newPage();
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForTimeout(2000);
-        return await page.content();
-    } finally {
-        await browser.close();
-    }
-};
-
-// Build a stable, cache-friendly search URL
 const buildSearchUrl = ({ startUrl, location, propertyType, categoryType, page = 1 }) => {
     if (startUrl) {
         const url = new URL(startUrl);
@@ -101,51 +59,10 @@ const buildSearchUrl = ({ startUrl, location, propertyType, categoryType, page =
     return url.href;
 };
 
-// Extract JSON-LD if available (cheapest, most reliable)
-const extractJsonLd = ($) => {
-    try {
-        const scripts = $('script[type="application/ld+json"]').toArray().slice(0, 5);
-        for (const script of scripts) {
-            const content = $(script).contents().text();
-            if (!content) continue;
-            try {
-                const parsed = JSON.parse(content);
-                const candidate = Array.isArray(parsed) ? parsed[0] : parsed;
-                if (!candidate || typeof candidate !== 'object') continue;
-                if (candidate['@type'] && /RealEstateListing|Offer/i.test(candidate['@type'])) {
-                    const offers = Array.isArray(candidate.offers) ? candidate.offers[0] : candidate.offers;
-                    const areaValue = candidate.floorSize?.value ?? candidate.floorSize;
-                    return {
-                        title: candidate.name || candidate.headline,
-                        description: candidate.description,
-                        location: candidate.address?.streetAddress || candidate.address?.addressLocality,
-                        city: candidate.address?.addressRegion,
-                        price: offers?.price ? Number(offers.price) : null,
-                        currency: offers?.priceCurrency || 'AED',
-                        bedrooms: candidate.numberOfRooms || candidate.numberOfBedrooms,
-                        bathrooms: candidate.numberOfBathroomsTotal || candidate.numberOfBathrooms,
-                        area: typeof areaValue === 'number' ? areaValue : numberFromText(areaValue),
-                        areaUnit: candidate.floorSize?.unitText,
-                        url: candidate.url,
-                        postedDate: candidate.datePosted || candidate.datePublished,
-                        agentName: candidate.seller?.name || candidate.agent?.name,
-                    };
-                }
-            } catch {
-                continue;
-            }
-        }
-    } catch (err) {
-        log.debug('JSON-LD extraction failed', { error: err.message });
-    }
-    return null;
-};
-
-// Extract listing card data from a search page
 const extractListingCards = ($) => {
     const cards = [];
     const selectors =
-        'article, [data-testid*="card"], [data-testid*=\"result\"], [class*=\"ResultCard\"], [class*=\"card\"]';
+        'article, [data-testid*="card"], [data-testid*="result"], [class*="ResultCard"], [class*="card"]';
 
     $(selectors)
         .toArray()
@@ -216,7 +133,45 @@ const extractListingCards = ($) => {
     return cards;
 };
 
-// Extract full details from detail page HTML (fallback after JSON-LD)
+const extractJsonLd = ($) => {
+    try {
+        const scripts = $('script[type="application/ld+json"]').toArray().slice(0, 5);
+        for (const script of scripts) {
+            const content = $(script).contents().text();
+            if (!content) continue;
+            try {
+                const parsed = JSON.parse(content);
+                const candidate = Array.isArray(parsed) ? parsed[0] : parsed;
+                if (!candidate || typeof candidate !== 'object') continue;
+                if (candidate['@type'] && /RealEstateListing|Offer/i.test(candidate['@type'])) {
+                    const offers = Array.isArray(candidate.offers) ? candidate.offers[0] : candidate.offers;
+                    const areaValue = candidate.floorSize?.value ?? candidate.floorSize;
+                    return {
+                        title: candidate.name || candidate.headline,
+                        description: candidate.description,
+                        location: candidate.address?.streetAddress || candidate.address?.addressLocality,
+                        city: candidate.address?.addressRegion,
+                        price: offers?.price ? Number(offers.price) : null,
+                        currency: offers?.priceCurrency || 'AED',
+                        bedrooms: candidate.numberOfRooms || candidate.numberOfBedrooms,
+                        bathrooms: candidate.numberOfBathroomsTotal || candidate.numberOfBathrooms,
+                        area: typeof areaValue === 'number' ? areaValue : numberFromText(areaValue),
+                        areaUnit: candidate.floorSize?.unitText,
+                        url: candidate.url,
+                        postedDate: candidate.datePosted || candidate.datePublished,
+                        agentName: candidate.seller?.name || candidate.agent?.name,
+                    };
+                }
+            } catch {
+                continue;
+            }
+        }
+    } catch (err) {
+        log.debug('JSON-LD extraction failed', { error: err.message });
+    }
+    return null;
+};
+
 const extractDetailFromHtml = ($, url) => {
     const title =
         cleanText($('h1, [data-testid*="title"]').first().text()) ||
@@ -283,6 +238,26 @@ const extractDetailFromHtml = ($, url) => {
     };
 };
 
+const fetchDetailWithCheerio = async (url, proxyInfo) => {
+    const options = {
+        url,
+        headers: {
+            'user-agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
+            'accept-language': 'en-US,en;q=0.9',
+        },
+        timeout: 30000,
+    };
+    if (proxyInfo?.url) {
+        options.proxyUrl = proxyInfo.url;
+    }
+    const response = await gotScraping(options);
+    const $ = load(response.body);
+    const jsonLd = extractJsonLd($) || {};
+    const htmlData = extractDetailFromHtml($, url);
+    return { ...htmlData, ...jsonLd, url };
+};
+
 await Actor.init();
 
 async function main() {
@@ -301,7 +276,6 @@ async function main() {
     if (categoryType !== 1 && categoryType !== 2) {
         throw new Error('categoryType must be 1 (sale) or 2 (rent).');
     }
-
     if (!startUrl && !location) {
         throw new Error('Provide either "startUrl" or "location".');
     }
@@ -312,13 +286,15 @@ async function main() {
     const MAX_PAGES = Number.isFinite(+maxPagesRaw) ? Math.max(1, +maxPagesRaw) : 20;
 
     let proxyConfig;
+    let proxyInfo;
     try {
         proxyConfig = await Actor.createProxyConfiguration(proxyConfiguration || {});
+        proxyInfo = await proxyConfig.newProxyInfo();
     } catch (err) {
         log.warning('Proxy configuration invalid; proceeding without proxy', { error: err.message });
     }
 
-    log.info('Starting PropertyFinder scraper (HTTP/JSON-first)', {
+    log.info('Starting PropertyFinder scraper (Playwright listings + HTTP detail)', {
         categoryType,
         propertyType,
         location,
@@ -331,133 +307,105 @@ async function main() {
     const enqueuedPages = new Set();
     let totalSaved = 0;
 
-    const router = createCheerioRouter();
-    let jsFallbackCount = 0;
-    const JS_FALLBACK_LIMIT = 3;
+    const crawler = new PlaywrightCrawler({
+        proxyConfiguration: proxyConfig,
+        headless: true,
+        maxConcurrency: 3,
+        maxRequestRetries: 2,
+        navigationTimeoutSecs: 35,
+        requestHandlerTimeoutSecs: 90,
+        launchContext: {
+            launcher: chromium,
+            launchOptions: {
+                headless: true,
+                args: [
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-features=IsolateOrigins,site-per-process',
+                ],
+            },
+        },
+        preNavigationHooks: [
+            async ({ page, request }) => {
+                await page.route('**/*.{png,jpg,jpeg,gif,webp,svg,css,font,woff,woff2}', (route) =>
+                    route.abort(),
+                );
+                await page.setExtraHTTPHeaders({
+                    'accept-language': 'en-US,en;q=0.9',
+                });
+                await page.setUserAgent(
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
+                );
+                log.info('Navigating', { url: request.url });
+            },
+        ],
+        async requestHandler({ page, request, crawler }) {
+            const pageNo = request.userData.pageNo || 1;
+            await page.goto(request.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await page.waitForTimeout(2500);
 
-    router.addDefaultHandler(async (ctx) => {
-        const { request, $, crawler } = ctx;
-        const pageNo = request.userData.pageNo || 1;
-        log.info(`Listing page ${pageNo}`, { url: request.url });
+            const html = await page.content();
+            const $ = load(html);
+            const cards = extractListingCards($);
 
-        let cards = extractListingCards($);
-
-        if (!cards.length && jsFallbackCount < JS_FALLBACK_LIMIT) {
-            jsFallbackCount += 1;
-            log.warning('No cards found with HTTP; trying Playwright fallback', {
-                pageNo,
-                url: request.url,
-                jsFallbackCount,
-            });
-            try {
-                const rendered = await renderWithPlaywright(request.url, proxyConfig);
-                if (rendered) {
-                    const rendered$ = load(rendered);
-                    cards = extractListingCards(rendered$);
-                }
-            } catch (err) {
-                log.warning('Playwright fallback failed', { error: err.message, url: request.url });
+            if (!cards.length) {
+                log.warning('No cards found even with JS', { url: request.url, pageNo });
             }
-        }
 
-        if (!cards.length) {
-            log.warning('No cards found on listing page', { pageNo, url: request.url });
-        }
+            for (const card of cards) {
+                if (!card.url || seenUrls.has(card.url)) continue;
+                seenUrls.add(card.url);
 
-        for (const card of cards) {
-            if (!card.url || seenUrls.has(card.url)) continue;
-            seenUrls.add(card.url);
+                const baseRecord = {
+                    ...card,
+                    propertyType: card.propertyType || propertyType,
+                    url: card.url,
+                };
 
-            const baseRecord = {
-                ...card,
-                propertyType: card.propertyType || propertyType,
-                url: card.url,
-            };
+                if (!collectDetails) {
+                    await Actor.pushData(baseRecord);
+                    totalSaved++;
+                    if (totalSaved >= RESULTS_WANTED) {
+                        log.info('Reached desired results from listings only', { totalSaved });
+                        await crawler.autoscaledPool?.abort();
+                        return;
+                    }
+                    continue;
+                }
 
-            if (!collectDetails) {
-                await Actor.pushData(baseRecord);
-                totalSaved++;
+                try {
+                    const detailData = await fetchDetailWithCheerio(card.url, proxyInfo);
+                    const record = { ...baseRecord, ...detailData };
+                    await Actor.pushData(record);
+                    totalSaved++;
+                } catch (err) {
+                    log.warning('Detail fetch failed', { url: card.url, error: err.message });
+                }
+
                 if (totalSaved >= RESULTS_WANTED) {
-                    log.info('Reached desired results from listing pages', { totalSaved });
+                    log.info('Reached desired results', { totalSaved });
                     await crawler.autoscaledPool?.abort();
                     return;
                 }
-                continue;
             }
 
-            await crawler.addRequests([
-                {
-                    url: card.url,
-                    userData: { label: 'detail', baseRecord },
-                },
-            ]);
-        }
-
-        if (pageNo < MAX_PAGES && totalSaved < RESULTS_WANTED) {
-            const nextPage = pageNo + 1;
-            const nextUrl = buildSearchUrl({
-                startUrl,
-                location,
-                propertyType,
-                categoryType,
-                page: nextPage,
-            });
-            if (!enqueuedPages.has(nextUrl)) {
-                enqueuedPages.add(nextUrl);
-                await crawler.addRequests([{ url: nextUrl, userData: { pageNo: nextPage } }]);
-                log.info('Enqueued next page', { nextPage });
+            if (pageNo < MAX_PAGES && totalSaved < RESULTS_WANTED) {
+                const nextPage = pageNo + 1;
+                const nextUrl = buildSearchUrl({
+                    startUrl,
+                    location,
+                    propertyType,
+                    categoryType,
+                    page: nextPage,
+                });
+                if (!enqueuedPages.has(nextUrl)) {
+                    enqueuedPages.add(nextUrl);
+                    await crawler.addRequests([{ url: nextUrl, userData: { pageNo: nextPage } }]);
+                    log.info('Enqueued next page', { nextPage });
+                }
             }
-        }
-    });
-
-    router.addHandler('detail', async (ctx) => {
-        const { request, $, crawler } = ctx;
-        if (totalSaved >= RESULTS_WANTED) {
-            await crawler.autoscaledPool?.abort();
-            return;
-        }
-
-        const jsonLdData = extractJsonLd($) || {};
-        const htmlData = extractDetailFromHtml($, request.url);
-
-        const record = {
-            ...request.userData.baseRecord,
-            ...htmlData,
-            ...jsonLdData,
-            url: request.url,
-        };
-
-        await Actor.pushData(record);
-        totalSaved++;
-
-        if (totalSaved % 25 === 0) {
-            log.info('Progress', { totalSaved, url: request.url });
-        }
-
-        if (totalSaved >= RESULTS_WANTED) {
-            log.info('Reached desired results', { totalSaved });
-            await crawler.autoscaledPool?.abort();
-        }
-    });
-
-    const crawler = new CheerioCrawler({
-        requestHandler: router,
-        useSessionPool: true,
-        persistCookiesPerSession: true,
-        proxyConfiguration: proxyConfig,
-        maxConcurrency: 6,
-        minConcurrency: 2,
-        maxRequestRetries: 3,
-        requestHandlerTimeoutSecs: 60,
-        additionalMimeTypes: ['application/json'],
-        preNavigationHooks: [
-            async ({ request }) => {
-                request.headers['user-agent'] =
-                    request.headers['user-agent'] ||
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36';
-                request.headers['accept-language'] = 'en-US,en;q=0.9';
-            },
-        ],
+        },
     });
 
     const initialUrl = buildSearchUrl({
@@ -487,4 +435,3 @@ main()
     .finally(async () => {
         await Actor.exit();
     });
-
