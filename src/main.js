@@ -328,6 +328,21 @@ const fetchDetailWithCheerio = async (url, proxyInfo) => {
     return { ...htmlData, ...jsonLd, url };
 };
 
+const fetchListingHtml = async (url, proxyInfo) => {
+    const options = {
+        url,
+        headers: {
+            'user-agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
+            'accept-language': 'en-US,en;q=0.9',
+        },
+        timeout: 30000,
+    };
+    if (proxyInfo?.url) options.proxyUrl = proxyInfo.url;
+    const response = await gotScraping(options);
+    return response.body;
+};
+
 await Actor.init();
 
 async function main() {
@@ -398,7 +413,9 @@ async function main() {
         },
         preNavigationHooks: [
             async ({ page, request }) => {
-                await page.route('**/*.{png,jpg,jpeg,gif,webp,svg,css,font,woff,woff2}', (route) => route.abort());
+                await page.route('**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2}', (route) => route.abort());
+                page.setDefaultNavigationTimeout(45000);
+                page.setDefaultTimeout(45000);
                 await page.context().setExtraHTTPHeaders({
                     'accept-language': 'en-US,en;q=0.9',
                     'user-agent':
@@ -409,10 +426,21 @@ async function main() {
         ],
         async requestHandler({ page, request, crawler }) {
             const pageNo = request.userData.pageNo || 1;
-            await page.goto(request.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            await page.waitForTimeout(2500);
+            let html;
+            try {
+                await page.goto(request.url, { waitUntil: 'networkidle', timeout: 45000 });
+                await page.waitForTimeout(2000);
+                html = await page.content();
+            } catch (err) {
+                log.warning('Playwright navigation failed, falling back to HTTP', { url: request.url, error: err.message });
+                try {
+                    html = await fetchListingHtml(request.url, proxyInfo);
+                } catch (httpErr) {
+                    log.warning('HTTP fallback failed for listing', { url: request.url, error: httpErr.message });
+                    throw err;
+                }
+            }
 
-            const html = await page.content();
             const $ = load(html);
             let cards = extractListingCards($);
 
