@@ -1,6 +1,8 @@
 // PropertyFinder.ae scraper - HTTP/JSON-first with Cheerio fallback for low cost and stealth
 import { Actor, log } from 'apify';
 import { CheerioCrawler, createCheerioRouter } from 'crawlee';
+import { chromium } from 'playwright';
+import { load } from 'cheerio';
 
 // Basic helpers
 const cleanText = (text) => {
@@ -30,6 +32,47 @@ const parsePrice = (text) => {
     const currencyMatch = (text || '').match(/AED|DHS|DH/i);
     const currency = currencyMatch ? currencyMatch[0].toUpperCase() : 'AED';
     return { price, currency };
+};
+
+// Build Playwright proxy options from Apify proxy configuration
+const buildPlaywrightProxy = async (proxyConfig) => {
+    if (!proxyConfig) return undefined;
+    try {
+        const info = await proxyConfig.newProxyInfo();
+        if (!info?.url) return undefined;
+        const parsed = new URL(info.url);
+        return {
+            server: `${parsed.protocol}//${parsed.host}`,
+            username: parsed.username || undefined,
+            password: parsed.password || undefined,
+        };
+    } catch (err) {
+        log.debug('Failed to create Playwright proxy config', { error: err.message });
+        return undefined;
+    }
+};
+
+// Render a page with Playwright when HTML-only crawl yields nothing
+const renderWithPlaywright = async (url, proxyConfig) => {
+    const proxy = await buildPlaywrightProxy(proxyConfig);
+    const browser = await chromium.launch({
+        headless: true,
+        args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
+    });
+
+    try {
+        const context = await browser.newContext({
+            proxy,
+            userAgent:
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
+        });
+        const page = await context.newPage();
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(2000);
+        return await page.content();
+    } finally {
+        await browser.close();
+    }
 };
 
 // Build a stable, cache-friendly search URL
@@ -289,13 +332,33 @@ async function main() {
     let totalSaved = 0;
 
     const router = createCheerioRouter();
+    let jsFallbackCount = 0;
+    const JS_FALLBACK_LIMIT = 3;
 
     router.addDefaultHandler(async (ctx) => {
         const { request, $, crawler } = ctx;
         const pageNo = request.userData.pageNo || 1;
         log.info(`Listing page ${pageNo}`, { url: request.url });
 
-        const cards = extractListingCards($);
+        let cards = extractListingCards($);
+
+        if (!cards.length && jsFallbackCount < JS_FALLBACK_LIMIT) {
+            jsFallbackCount += 1;
+            log.warning('No cards found with HTTP; trying Playwright fallback', {
+                pageNo,
+                url: request.url,
+                jsFallbackCount,
+            });
+            try {
+                const rendered = await renderWithPlaywright(request.url, proxyConfig);
+                if (rendered) {
+                    const rendered$ = load(rendered);
+                    cards = extractListingCards(rendered$);
+                }
+            } catch (err) {
+                log.warning('Playwright fallback failed', { error: err.message, url: request.url });
+            }
+        }
 
         if (!cards.length) {
             log.warning('No cards found on listing page', { pageNo, url: request.url });
@@ -382,8 +445,8 @@ async function main() {
         useSessionPool: true,
         persistCookiesPerSession: true,
         proxyConfiguration: proxyConfig,
-        maxConcurrency: 12,
-        minConcurrency: 5,
+        maxConcurrency: 6,
+        minConcurrency: 2,
         maxRequestRetries: 3,
         requestHandlerTimeoutSecs: 60,
         additionalMimeTypes: ['application/json'],
